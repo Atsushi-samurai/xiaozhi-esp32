@@ -3,6 +3,7 @@
 #include "codecs/es8311_audio_codec.h"
 #include "display/lcd_display.h"
 #include "application.h"
+#include "assets/lang_config.h"
 #include "button.h"
 #include "config.h"
 #include "i2c_device.h"
@@ -20,6 +21,7 @@
 #include <ssid_manager.h>
 #include <algorithm>
 #include <memory>
+#include <string>
 
 #define TAG "CardputerAdv"
 
@@ -201,9 +203,9 @@ private:
                 int step = (current_vol <= 20 || current_vol >= 80) ? 1 : 10;
                 int new_vol = std::min(100, current_vol + step);
                 codec->SetOutputVolume(new_vol);
-                char msg[32];
-                snprintf(msg, sizeof(msg), "Volume: %d%%", new_vol);
-                display_->ShowNotification(msg, 1500);
+                display_->ShowNotification(std::string(Lang::Strings::VOLUME) +
+                                               std::to_string(new_vol) + "%",
+                                           1500);
                 ESP_LOGI(TAG, "Volume up: %d%%", new_vol);
                 break;
             }
@@ -213,9 +215,9 @@ private:
                 int step = (current_vol <= 20 || current_vol >= 80) ? 1 : 10;
                 int new_vol = std::max(0, current_vol - step);
                 codec->SetOutputVolume(new_vol);
-                char msg[32];
-                snprintf(msg, sizeof(msg), "Volume: %d%%", new_vol);
-                display_->ShowNotification(msg, 1500);
+                display_->ShowNotification(std::string(Lang::Strings::VOLUME) +
+                                               std::to_string(new_vol) + "%",
+                                           1500);
                 ESP_LOGI(TAG, "Volume down: %d%%", new_vol);
                 break;
             }
@@ -225,9 +227,9 @@ private:
                 int step = (current_br <= (MIN_BRIGHTNESS + 20) || current_br >= 80) ? 1 : 10;
                 int new_br = std::min(100, (int)current_br + step);
                 backlight->SetBrightness(new_br, true);
-                char msg[32];
-                snprintf(msg, sizeof(msg), "Brightness: %d%%", new_br);
-                display_->ShowNotification(msg, 1500);
+                display_->ShowNotification(std::string(Lang::Strings::BRIGHTNESS) +
+                                               std::to_string(new_br) + "%",
+                                           1500);
                 ESP_LOGI(TAG, "Brightness up: %d%%", new_br);
                 break;
             }
@@ -237,9 +239,9 @@ private:
                 int step = (current_br <= (MIN_BRIGHTNESS + 20) || current_br >= 80) ? 1 : 10;
                 int new_br = std::max((int)MIN_BRIGHTNESS, (int)current_br - step);
                 backlight->SetBrightness(new_br, true);
-                char msg[32];
-                snprintf(msg, sizeof(msg), "Brightness: %d%%", new_br);
-                display_->ShowNotification(msg, 1500);
+                display_->ShowNotification(std::string(Lang::Strings::BRIGHTNESS) +
+                                               std::to_string(new_br) + "%",
+                                           1500);
                 ESP_LOGI(TAG, "Brightness down: %d%%", new_br);
                 break;
             }

@@ -35,6 +35,7 @@ config CUSTOM_ASSETS_FILE
 
 choice
     prompt "Default Language"
+    default LANGUAGE_JA_JP if BOARD_TYPE_M5STACK_CARDPUTER_ADV
     default LANGUAGE_ZH_CN
     help
         Select device display language

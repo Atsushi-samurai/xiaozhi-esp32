@@ -1,3 +1,4 @@
+#include "assets/lang_config.h"
 #include "wifi_config_ui.h"
 #include <esp_log.h>
 #include <esp_wifi.h>
@@ -58,8 +59,8 @@ void WifiConfigUI::StartScanning() {
 
     lv_obj_t* canvas = lv_scr_act();
     lv_obj_clean(canvas);
-    DrawHeader("扫描 WiFi 中...");
-    DrawFooter("请稍候...");
+    DrawHeader(Lang::Strings::SCANNING_WIFI);
+    DrawFooter(Lang::Strings::PLEASE_WAIT);
 
     // Perform WiFi scan
     DoWifiScan();
@@ -67,8 +68,8 @@ void WifiConfigUI::StartScanning() {
     // Show results
     if (scan_results_.empty()) {
         lv_obj_clean(canvas);
-        DrawHeader("未找到 WiFi");
-        DrawFooter("W:手动输入 Esc:退出");
+        DrawHeader(Lang::Strings::WIFI_NOT_FOUND);
+        DrawFooter(Lang::Strings::WIFI_MANUAL_EXIT_HINT);
     } else {
         state_ = WifiConfigState::SelectWifi;
         ShowScanResults();
@@ -139,16 +140,16 @@ void WifiConfigUI::RedrawPasswordInput() {
     lv_obj_t* canvas = lv_scr_act();
     lv_obj_clean(canvas);
 
-    DrawHeader("输入密码");
+    DrawHeader(Lang::Strings::WIFI_ENTER_PASSWORD);
 
     // Show selected SSID
     lv_obj_t* label = lv_label_create(canvas);
-    lv_label_set_text_fmt(label, "连接: %s", selected_ssid_.c_str());
+    lv_label_set_text_fmt(label, "%s%s", Lang::Strings::CONNECT_TO, selected_ssid_.c_str());
     lv_obj_set_style_text_color(label, lv_color_hex(0x00FF00), 0);
     lv_obj_align(label, LV_ALIGN_TOP_LEFT, 5, 5);
 
     lv_obj_t* pwd_label = lv_label_create(canvas);
-    lv_label_set_text(pwd_label, "请输入密码:");
+    lv_label_set_text(pwd_label, Lang::Strings::WIFI_PASSWORD);
     lv_obj_set_style_text_color(pwd_label, lv_color_hex(0xFFFFFF), 0);
     lv_obj_align(pwd_label, LV_ALIGN_TOP_LEFT, 5, 30);
 
@@ -159,7 +160,7 @@ void WifiConfigUI::RedrawPasswordInput() {
     lv_obj_set_style_text_color(input_label, lv_color_hex(0xFFFF00), 0);
     lv_obj_align(input_label, LV_ALIGN_TOP_LEFT, 5, 55);
 
-    DrawFooter("Enter:确认 Esc:返回");
+    DrawFooter(Lang::Strings::WIFI_CONFIRM_BACK_HINT);
 }
 
 void WifiConfigUI::ShowManualInput() {
@@ -178,7 +179,7 @@ void WifiConfigUI::RedrawManualInput() {
     lv_obj_t* canvas = lv_scr_act();
     lv_obj_clean(canvas);
 
-    DrawHeader("手动设置 WiFi");
+    DrawHeader(Lang::Strings::WIFI_MANUAL_SETUP);
 
     lv_obj_t* ssid_label = lv_label_create(canvas);
     lv_label_set_text(ssid_label, "SSID:");
@@ -195,7 +196,7 @@ void WifiConfigUI::RedrawManualInput() {
     lv_obj_align(ssid_input, LV_ALIGN_TOP_LEFT, 5, 45);
 
     lv_obj_t* pwd_label = lv_label_create(canvas);
-    lv_label_set_text(pwd_label, "密码:");
+    lv_label_set_text(pwd_label, Lang::Strings::WIFI_PASSWORD);
     lv_obj_set_style_text_color(pwd_label, lv_color_hex(0xFFFFFF), 0);
     lv_obj_align(pwd_label, LV_ALIGN_TOP_LEFT, 5, 70);
 
@@ -208,7 +209,7 @@ void WifiConfigUI::RedrawManualInput() {
     lv_obj_set_style_text_color(pwd_input, input_focus_on_password_ ? lv_color_hex(0xFFFF00) : lv_color_hex(0x888888), 0);
     lv_obj_align(pwd_input, LV_ALIGN_TOP_LEFT, 5, 90);
 
-    DrawFooter("Tab:切换 Enter:确认 Esc:返回");
+    DrawFooter(Lang::Strings::WIFI_MANUAL_CONFIRM_BACK_HINT);
 }
 
 void WifiConfigUI::ShowSavedList() {
@@ -225,15 +226,16 @@ void WifiConfigUI::DrawSavedWifiList() {
     lv_obj_clean(canvas);
 
     char title[48];
-    snprintf(title, sizeof(title), "已保存的 WiFi (%d/10)", (int)saved_wifi_list_.size());
+    snprintf(title, sizeof(title), Lang::Strings::WIFI_SAVED_NETWORKS,
+             (int)saved_wifi_list_.size());
     DrawHeader(title);
 
     if (saved_wifi_list_.empty()) {
         lv_obj_t* empty_label = lv_label_create(canvas);
-        lv_label_set_text(empty_label, "没有已保存的 WiFi");
+        lv_label_set_text(empty_label, Lang::Strings::WIFI_NO_SAVED_NETWORKS);
         lv_obj_set_style_text_color(empty_label, lv_color_hex(0x888888), 0);
         lv_obj_align(empty_label, LV_ALIGN_CENTER, 0, 0);
-        DrawFooter("Esc:返回");
+        DrawFooter(Lang::Strings::WIFI_BACK_HINT);
         return;
     }
 
@@ -256,7 +258,7 @@ void WifiConfigUI::DrawSavedWifiList() {
         y_offset += 20;
     }
 
-    DrawFooter("↑↓:选择 Enter:连接 Del:删除 Esc:返回");
+    DrawFooter(Lang::Strings::WIFI_SAVED_LIST_HINT);
 }
 
 void WifiConfigUI::ShowConnecting() {
@@ -265,14 +267,14 @@ void WifiConfigUI::ShowConnecting() {
     lv_obj_t* canvas = lv_scr_act();
     lv_obj_clean(canvas);
 
-    DrawHeader("连接中...");
+    DrawHeader(Lang::Strings::CONNECTING);
 
     lv_obj_t* ssid_label = lv_label_create(canvas);
-    lv_label_set_text_fmt(ssid_label, "正在连接: %s", selected_ssid_.c_str());
+    lv_label_set_text_fmt(ssid_label, Lang::Strings::WIFI_CONNECTING_TO, selected_ssid_.c_str());
     lv_obj_set_style_text_color(ssid_label, lv_color_hex(0xFFFF00), 0);
     lv_obj_align(ssid_label, LV_ALIGN_CENTER, 0, 0);
 
-    DrawFooter("请稍候...");
+    DrawFooter(Lang::Strings::PLEASE_WAIT);
 }
 
 void WifiConfigUI::ShowSuccess() {
@@ -281,19 +283,19 @@ void WifiConfigUI::ShowSuccess() {
     lv_obj_t* canvas = lv_scr_act();
     lv_obj_clean(canvas);
 
-    DrawHeader("连接成功!");
+    DrawHeader(Lang::Strings::CONNECTION_SUCCESSFUL);
 
     lv_obj_t* ssid_label = lv_label_create(canvas);
-    lv_label_set_text_fmt(ssid_label, "已连接: %s", selected_ssid_.c_str());
+    lv_label_set_text_fmt(ssid_label, "%s%s", Lang::Strings::CONNECTED_TO, selected_ssid_.c_str());
     lv_obj_set_style_text_color(ssid_label, lv_color_hex(0x00FF00), 0);
     lv_obj_align(ssid_label, LV_ALIGN_CENTER, 0, -10);
 
     lv_obj_t* saved_label = lv_label_create(canvas);
-    lv_label_set_text(saved_label, "WiFi 配置已保存");
+    lv_label_set_text(saved_label, Lang::Strings::WIFI_SETTINGS_SAVED);
     lv_obj_set_style_text_color(saved_label, lv_color_hex(0x00FFFF), 0);
     lv_obj_align(saved_label, LV_ALIGN_CENTER, 0, 15);
 
-    DrawFooter("Enter:继续");
+    DrawFooter(Lang::Strings::WIFI_CONTINUE_HINT);
 }
 
 void WifiConfigUI::ShowFailed() {
@@ -302,14 +304,15 @@ void WifiConfigUI::ShowFailed() {
     lv_obj_t* canvas = lv_scr_act();
     lv_obj_clean(canvas);
 
-    DrawHeader("连接失败");
+    DrawHeader(Lang::Strings::WIFI_CONNECTION_FAILED);
 
     lv_obj_t* ssid_label = lv_label_create(canvas);
-    lv_label_set_text_fmt(ssid_label, "无法连接: %s", selected_ssid_.c_str());
+    lv_label_set_text_fmt(ssid_label, Lang::Strings::WIFI_CANNOT_CONNECT_TO,
+                          selected_ssid_.c_str());
     lv_obj_set_style_text_color(ssid_label, lv_color_hex(0xFF0000), 0);
     lv_obj_align(ssid_label, LV_ALIGN_CENTER, 0, 0);
 
-    DrawFooter("Enter:重试 Esc:返回");
+    DrawFooter(Lang::Strings::WIFI_RETRY_BACK_HINT);
 }
 
 void WifiConfigUI::DrawHeader(const char* title) {
@@ -335,7 +338,7 @@ void WifiConfigUI::DrawWifiList(const std::vector<WifiScanResult>& list, int sel
     lv_obj_t* canvas = lv_scr_act();
     lv_obj_clean(canvas);
 
-    DrawHeader("选择 WiFi");
+    DrawHeader(Lang::Strings::WIFI_SELECT_NETWORK);
 
     int y_offset = 25;
     int visible_count = std::min((int)list.size() - scroll, MAX_VISIBLE_ITEMS);
@@ -360,7 +363,7 @@ void WifiConfigUI::DrawWifiList(const std::vector<WifiScanResult>& list, int sel
         y_offset += 20;
     }
 
-    DrawFooter("↑↓:选择 Enter:连接 W:手动 S:已保存");
+    DrawFooter(Lang::Strings::WIFI_SELECT_NETWORK_HINT);
 }
 
 std::string WifiConfigUI::GetSignalBars(int8_t rssi) {
