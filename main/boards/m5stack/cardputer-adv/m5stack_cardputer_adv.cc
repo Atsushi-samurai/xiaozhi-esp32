@@ -1,25 +1,27 @@
-#include "wifi_board.h"
-#include "wifi_config_ui.h"
-#include "codecs/es8311_audio_codec.h"
-#include "display/lcd_display.h"
+#include "adc_battery_monitor.h"
 #include "application.h"
 #include "assets/lang_config.h"
 #include "button.h"
+#include "codecs/es8311_audio_codec.h"
 #include "config.h"
+#include "display/lcd_display.h"
 #include "i2c_device.h"
 #include "tca8418_keyboard.h"
-#include "adc_battery_monitor.h"
+#include "wifi_board.h"
+#include "wifi_config_ui.h"
 
-#include <esp_log.h>
 #include <driver/i2c_master.h>
 #include <driver/i2s_common.h>
 #include <driver/spi_common.h>
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
 #include <esp_lcd_panel_vendor.h>
-#include <wifi_manager.h>
+#include <esp_log.h>
+#include <esp_timer.h>
 #include <ssid_manager.h>
+#include <wifi_manager.h>
 #include <algorithm>
+#include <atomic>
 #include <memory>
 #include <string>
 
@@ -27,6 +29,10 @@
 
 // Backlight uses percentage scale (0-100). Keep a minimum of 30% to avoid a too-dim screen.
 #define MIN_BRIGHTNESS 30
+
+// Deliberately require a modifier and a long hold so normal typing cannot enter AP mode.
+static constexpr uint64_t WIFI_CONFIG_HOLD_TIME_US = 3 * 1000 * 1000ULL;
+static constexpr uint64_t WIFI_CONFIG_CONFIRMATION_DELAY_US = 750 * 1000ULL;
 
 class M5StackCardputerAdvBoard : public WifiBoard {
 private:
@@ -39,6 +45,108 @@ private:
     AdcBatteryMonitor* battery_monitor_ = nullptr;
     std::unique_ptr<WifiConfigUI> wifi_config_ui_;
     bool wifi_config_mode_ = false;
+    esp_timer_handle_t wifi_config_hold_timer_ = nullptr;
+    esp_timer_handle_t wifi_config_confirmation_timer_ = nullptr;
+    std::atomic_bool wifi_config_key_pressed_{false};
+    std::atomic_bool wifi_config_hold_triggered_{false};
+
+    void InitializeWifiConfigTimers() {
+        const esp_timer_create_args_t hold_timer_args = {
+            .callback =
+                [](void* arg) {
+                    static_cast<M5StackCardputerAdvBoard*>(arg)->OnWifiConfigKeyHeld();
+                },
+            .arg = this,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "wifi_cfg_key_hold",
+            .skip_unhandled_events = true,
+        };
+        ESP_ERROR_CHECK(esp_timer_create(&hold_timer_args, &wifi_config_hold_timer_));
+
+        const esp_timer_create_args_t confirmation_timer_args = {
+            .callback =
+                [](void* arg) {
+                    static_cast<M5StackCardputerAdvBoard*>(arg)->OnWifiConfigConfirmationElapsed();
+                },
+            .arg = this,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "wifi_cfg_confirm",
+            .skip_unhandled_events = true,
+        };
+        ESP_ERROR_CHECK(
+            esp_timer_create(&confirmation_timer_args, &wifi_config_confirmation_timer_));
+    }
+
+    void CancelWifiConfigKeyHold() {
+        wifi_config_key_pressed_.store(false);
+        if (wifi_config_hold_timer_ != nullptr) {
+            esp_timer_stop(wifi_config_hold_timer_);
+        }
+    }
+
+    void OnWifiConfigKeyHeld() {
+        if (!wifi_config_key_pressed_.load()) {
+            return;
+        }
+
+        wifi_config_hold_triggered_.store(true);
+        Application::GetInstance().Schedule([this]() {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() != kDeviceStateIdle) {
+                wifi_config_hold_triggered_.store(false);
+                return;
+            }
+
+            // Show a visible confirmation before interrupting the network session.
+            display_->ShowNotification(Lang::Strings::ENTERING_WIFI_CONFIG_MODE, 1000);
+            ESP_LOGI(TAG, "Ctrl+W held for three seconds; WiFi config starts after confirmation");
+            ESP_ERROR_CHECK(esp_timer_start_once(wifi_config_confirmation_timer_,
+                                                 WIFI_CONFIG_CONFIRMATION_DELAY_US));
+        });
+    }
+
+    void OnWifiConfigConfirmationElapsed() {
+        Application::GetInstance().Schedule([this]() {
+            auto& app = Application::GetInstance();
+            if (!wifi_config_hold_triggered_.exchange(false) ||
+                app.GetDeviceState() != kDeviceStateIdle) {
+                return;
+            }
+
+            // WifiBoard performs the existing graceful protocol shutdown, then starts its AP
+            // portal.
+            EnterWifiConfigMode();
+        });
+    }
+
+    void HandleWifiConfigShortcut(const KeyEvent& event) {
+        if (event.key_code == KC_LCTRL && !event.pressed) {
+            CancelWifiConfigKeyHold();
+            return;
+        }
+
+        if (event.key_code != KC_W) {
+            return;
+        }
+
+        if (!event.pressed) {
+            CancelWifiConfigKeyHold();
+            return;
+        }
+
+        if ((keyboard_->GetModifierMask() & KEY_MOD_CTRL) == 0) {
+            return;
+        }
+
+        if (Application::GetInstance().GetDeviceState() != kDeviceStateIdle) {
+            ESP_LOGD(TAG, "Ignoring Ctrl+W WiFi shortcut outside idle state");
+            return;
+        }
+
+        wifi_config_key_pressed_.store(true);
+        wifi_config_hold_triggered_.store(false);
+        ESP_ERROR_CHECK(esp_timer_start_once(wifi_config_hold_timer_, WIFI_CONFIG_HOLD_TIME_US));
+    }
 
     void InitializeI2c() {
         ESP_LOGI(TAG, "Initialize I2C bus");
@@ -50,9 +158,10 @@ private:
             .glitch_ignore_cnt = 7,
             .intr_priority = 0,
             .trans_queue_depth = 0,
-            .flags = {
-                .enable_internal_pullup = 1,
-            },
+            .flags =
+                {
+                    .enable_internal_pullup = 1,
+                },
         };
         ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_cfg, &i2c_bus_));
     }
@@ -118,9 +227,9 @@ private:
         ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(panel_, DISPLAY_SWAP_XY));
         ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel_, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y));
 
-        display_ = new SpiLcdDisplay(panel_io_, panel_,
-            DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y,
-            DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
+        display_ = new SpiLcdDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT,
+                                     DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X,
+                                     DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
     void InitializeButtons() {
@@ -135,28 +244,24 @@ private:
     }
 
     void InitializeBatteryMonitor() {
-        ESP_LOGI(TAG, "Initialize battery monitor (GPIO%d, %dK/%dK divider)",
-                 BATTERY_ADC_CHANNEL, (int)(BATTERY_UPPER_RESISTOR / 1000), (int)(BATTERY_LOWER_RESISTOR / 1000));
-        battery_monitor_ = new AdcBatteryMonitor(
-            BATTERY_ADC_UNIT, BATTERY_ADC_CHANNEL,
-            BATTERY_UPPER_RESISTOR, BATTERY_LOWER_RESISTOR,
-            BATTERY_CHARGING_PIN);
+        ESP_LOGI(TAG, "Initialize battery monitor (GPIO%d, %dK/%dK divider)", BATTERY_ADC_CHANNEL,
+                 (int)(BATTERY_UPPER_RESISTOR / 1000), (int)(BATTERY_LOWER_RESISTOR / 1000));
+        battery_monitor_ =
+            new AdcBatteryMonitor(BATTERY_ADC_UNIT, BATTERY_ADC_CHANNEL, BATTERY_UPPER_RESISTOR,
+                                  BATTERY_LOWER_RESISTOR, BATTERY_CHARGING_PIN);
     }
 
     void InitializeKeyboard() {
         ESP_LOGI(TAG, "Initialize TCA8418 keyboard");
         keyboard_ = new Tca8418Keyboard(i2c_bus_, KEYBOARD_TCA8418_ADDR, KEYBOARD_INT_PIN);
         keyboard_->Initialize();
+        InitializeWifiConfigTimers();
 
         // Set legacy callback for volume/brightness control
-        keyboard_->SetKeyCallback([this](LegacyKeyCode key) {
-            HandleLegacyKeyPress(key);
-        });
+        keyboard_->SetKeyCallback([this](LegacyKeyCode key) { HandleLegacyKeyPress(key); });
 
         // Set full key event callback for WiFi config and text input
-        keyboard_->SetKeyEventCallback([this](const KeyEvent& event) {
-            HandleKeyEvent(event);
-        });
+        keyboard_->SetKeyEventCallback([this](const KeyEvent& event) { HandleKeyEvent(event); });
     }
 
     void HandleKeyEvent(const KeyEvent& event) {
@@ -172,6 +277,8 @@ private:
             }
             return;
         }
+
+        HandleWifiConfigShortcut(event);
 
         // Handle W and S keys during WiFi configuring state (scanning screen)
         auto& app = Application::GetInstance();
@@ -203,9 +310,8 @@ private:
                 int step = (current_vol <= 20 || current_vol >= 80) ? 1 : 10;
                 int new_vol = std::min(100, current_vol + step);
                 codec->SetOutputVolume(new_vol);
-                display_->ShowNotification(std::string(Lang::Strings::VOLUME) +
-                                               std::to_string(new_vol) + "%",
-                                           1500);
+                display_->ShowNotification(
+                    std::string(Lang::Strings::VOLUME) + std::to_string(new_vol) + "%", 1500);
                 ESP_LOGI(TAG, "Volume up: %d%%", new_vol);
                 break;
             }
@@ -215,9 +321,8 @@ private:
                 int step = (current_vol <= 20 || current_vol >= 80) ? 1 : 10;
                 int new_vol = std::max(0, current_vol - step);
                 codec->SetOutputVolume(new_vol);
-                display_->ShowNotification(std::string(Lang::Strings::VOLUME) +
-                                               std::to_string(new_vol) + "%",
-                                           1500);
+                display_->ShowNotification(
+                    std::string(Lang::Strings::VOLUME) + std::to_string(new_vol) + "%", 1500);
                 ESP_LOGI(TAG, "Volume down: %d%%", new_vol);
                 break;
             }
@@ -227,9 +332,8 @@ private:
                 int step = (current_br <= (MIN_BRIGHTNESS + 20) || current_br >= 80) ? 1 : 10;
                 int new_br = std::min(100, (int)current_br + step);
                 backlight->SetBrightness(new_br, true);
-                display_->ShowNotification(std::string(Lang::Strings::BRIGHTNESS) +
-                                               std::to_string(new_br) + "%",
-                                           1500);
+                display_->ShowNotification(
+                    std::string(Lang::Strings::BRIGHTNESS) + std::to_string(new_br) + "%", 1500);
                 ESP_LOGI(TAG, "Brightness up: %d%%", new_br);
                 break;
             }
@@ -239,9 +343,8 @@ private:
                 int step = (current_br <= (MIN_BRIGHTNESS + 20) || current_br >= 80) ? 1 : 10;
                 int new_br = std::max((int)MIN_BRIGHTNESS, (int)current_br - step);
                 backlight->SetBrightness(new_br, true);
-                display_->ShowNotification(std::string(Lang::Strings::BRIGHTNESS) +
-                                               std::to_string(new_br) + "%",
-                                           1500);
+                display_->ShowNotification(
+                    std::string(Lang::Strings::BRIGHTNESS) + std::to_string(new_br) + "%", 1500);
                 ESP_LOGI(TAG, "Brightness down: %d%%", new_br);
                 break;
             }
@@ -262,9 +365,10 @@ private:
         ESP_LOGI(TAG, "Starting keyboard WiFi config UI");
         wifi_config_mode_ = true;
         wifi_config_ui_ = std::make_unique<WifiConfigUI>(display_);
-        wifi_config_ui_->SetConnectCallback([this](const std::string& ssid, const std::string& password) {
-            AttemptWifiConnection(ssid, password);
-        });
+        wifi_config_ui_->SetConnectCallback(
+            [this](const std::string& ssid, const std::string& password) {
+                AttemptWifiConnection(ssid, password);
+            });
         wifi_config_ui_->Start();
     }
 
@@ -272,9 +376,10 @@ private:
         ESP_LOGI(TAG, "Starting keyboard WiFi config UI (saved list)");
         wifi_config_mode_ = true;
         wifi_config_ui_ = std::make_unique<WifiConfigUI>(display_);
-        wifi_config_ui_->SetConnectCallback([this](const std::string& ssid, const std::string& password) {
-            AttemptWifiConnection(ssid, password);
-        });
+        wifi_config_ui_->SetConnectCallback(
+            [this](const std::string& ssid, const std::string& password) {
+                AttemptWifiConnection(ssid, password);
+            });
         wifi_config_ui_->StartWithSavedList();
     }
 
@@ -340,27 +445,22 @@ public:
         // the ES8311 codec before channels start running.
         static struct CardputerAdvEs8311 : public Es8311AudioCodec {
             CardputerAdvEs8311(void* i2c, i2c_port_t port, int in_rate, int out_rate,
-                gpio_num_t mclk, gpio_num_t bclk, gpio_num_t ws,
-                gpio_num_t dout, gpio_num_t din, gpio_num_t pa,
-                uint8_t addr, bool use_mclk)
-                : Es8311AudioCodec(i2c, port, in_rate, out_rate,
-                    mclk, bclk, ws, dout, din, pa, addr, use_mclk) {
+                               gpio_num_t mclk, gpio_num_t bclk, gpio_num_t ws, gpio_num_t dout,
+                               gpio_num_t din, gpio_num_t pa, uint8_t addr, bool use_mclk)
+                : Es8311AudioCodec(i2c, port, in_rate, out_rate, mclk, bclk, ws, dout, din, pa,
+                                   addr, use_mclk) {
                 i2s_channel_disable(tx_handle_);
                 i2s_channel_disable(rx_handle_);
             }
-        } audio_codec(
-            i2c_bus_, I2C_NUM_0,
-            AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
-            AUDIO_I2S_GPIO_MCLK, AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS,
-            AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN,
-            AUDIO_CODEC_PA_PIN, AUDIO_CODEC_ES8311_ADDR,
-            false);  // use_mclk = false
+        } audio_codec(i2c_bus_, I2C_NUM_0, AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
+                      AUDIO_I2S_GPIO_MCLK, AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS,
+                      AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN, AUDIO_CODEC_PA_PIN,
+                      AUDIO_CODEC_ES8311_ADDR,
+                      false);  // use_mclk = false
         return &audio_codec;
     }
 
-    virtual Display* GetDisplay() override {
-        return display_;
-    }
+    virtual Display* GetDisplay() override { return display_; }
 
     virtual Backlight* GetBacklight() override {
         // M5GFX uses 256Hz PWM frequency for Cardputer backlight
