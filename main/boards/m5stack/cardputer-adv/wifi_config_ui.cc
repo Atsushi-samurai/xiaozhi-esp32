@@ -8,6 +8,17 @@
 
 #define TAG "WifiConfigUI"
 
+namespace {
+
+lv_obj_t* CreateLabel(lv_obj_t* parent) {
+    lv_obj_t* label = lv_label_create(parent);
+    lv_obj_set_style_bg_opa(label, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(0xFFFFFF), 0);
+    return label;
+}
+
+}  // namespace
+
 WifiConfigUI::WifiConfigUI(LcdDisplay* display)
     : display_(display),
       state_(WifiConfigState::Scanning),
@@ -160,21 +171,18 @@ void WifiConfigUI::RedrawPasswordInput() {
     DrawHeader(Lang::Strings::WIFI_ENTER_PASSWORD);
 
     // Show selected SSID
-    lv_obj_t* label = lv_label_create(canvas);
+    lv_obj_t* label = CreateLabel(canvas);
     lv_label_set_text_fmt(label, "%s%s", Lang::Strings::CONNECT_TO, selected_ssid_.c_str());
-    lv_obj_set_style_text_color(label, lv_color_hex(0x00FF00), 0);
     lv_obj_align(label, LV_ALIGN_TOP_LEFT, 5, 5);
 
-    lv_obj_t* pwd_label = lv_label_create(canvas);
+    lv_obj_t* pwd_label = CreateLabel(canvas);
     lv_label_set_text(pwd_label, Lang::Strings::WIFI_PASSWORD);
-    lv_obj_set_style_text_color(pwd_label, lv_color_hex(0xFFFFFF), 0);
     lv_obj_align(pwd_label, LV_ALIGN_TOP_LEFT, 5, 30);
 
-    lv_obj_t* input_label = lv_label_create(canvas);
+    lv_obj_t* input_label = CreateLabel(canvas);
     std::string display_pwd(input_password_.length(), '*');
     display_pwd += cursor_visible_ ? "_" : " ";
     lv_label_set_text_fmt(input_label, ">>> %s", display_pwd.c_str());
-    lv_obj_set_style_text_color(input_label, lv_color_hex(0xFFFF00), 0);
     lv_obj_align(input_label, LV_ALIGN_TOP_LEFT, 5, 55);
 
     DrawFooter(Lang::Strings::WIFI_CONFIRM_BACK_HINT);
@@ -197,34 +205,28 @@ void WifiConfigUI::RedrawManualInput() {
 
     DrawHeader(Lang::Strings::WIFI_MANUAL_SETUP);
 
-    lv_obj_t* ssid_label = lv_label_create(canvas);
+    lv_obj_t* ssid_label = CreateLabel(canvas);
     lv_label_set_text(ssid_label, "SSID:");
-    lv_obj_set_style_text_color(ssid_label, lv_color_hex(0xFFFFFF), 0);
     lv_obj_align(ssid_label, LV_ALIGN_TOP_LEFT, 5, 25);
 
-    lv_obj_t* ssid_input = lv_label_create(canvas);
+    lv_obj_t* ssid_input = CreateLabel(canvas);
     std::string ssid_display = ">>> " + input_ssid_;
     if (!input_focus_on_password_) {
         ssid_display += cursor_visible_ ? "_" : " ";
     }
     lv_label_set_text(ssid_input, ssid_display.c_str());
-    lv_obj_set_style_text_color(
-        ssid_input, input_focus_on_password_ ? lv_color_hex(0x888888) : lv_color_hex(0xFFFF00), 0);
     lv_obj_align(ssid_input, LV_ALIGN_TOP_LEFT, 5, 45);
 
-    lv_obj_t* pwd_label = lv_label_create(canvas);
+    lv_obj_t* pwd_label = CreateLabel(canvas);
     lv_label_set_text(pwd_label, Lang::Strings::WIFI_PASSWORD);
-    lv_obj_set_style_text_color(pwd_label, lv_color_hex(0xFFFFFF), 0);
     lv_obj_align(pwd_label, LV_ALIGN_TOP_LEFT, 5, 70);
 
-    lv_obj_t* pwd_input = lv_label_create(canvas);
+    lv_obj_t* pwd_input = CreateLabel(canvas);
     std::string pwd_display = ">>> " + std::string(input_password_.length(), '*');
     if (input_focus_on_password_) {
         pwd_display += cursor_visible_ ? "_" : " ";
     }
     lv_label_set_text(pwd_input, pwd_display.c_str());
-    lv_obj_set_style_text_color(
-        pwd_input, input_focus_on_password_ ? lv_color_hex(0xFFFF00) : lv_color_hex(0x888888), 0);
     lv_obj_align(pwd_input, LV_ALIGN_TOP_LEFT, 5, 90);
 
     DrawFooter(Lang::Strings::WIFI_MANUAL_CONFIRM_BACK_HINT);
@@ -248,9 +250,8 @@ void WifiConfigUI::DrawSavedWifiList() {
     DrawHeader(title);
 
     if (saved_wifi_list_.empty()) {
-        lv_obj_t* empty_label = lv_label_create(canvas);
+        lv_obj_t* empty_label = CreateLabel(canvas);
         lv_label_set_text(empty_label, Lang::Strings::WIFI_NO_SAVED_NETWORKS);
-        lv_obj_set_style_text_color(empty_label, lv_color_hex(0x888888), 0);
         lv_obj_align(empty_label, LV_ALIGN_CENTER, 0, 0);
         DrawFooter(Lang::Strings::WIFI_BACK_HINT);
         return;
@@ -264,13 +265,11 @@ void WifiConfigUI::DrawSavedWifiList() {
         int idx = saved_scroll_offset_ + i;
         bool is_selected = (idx == saved_selected_index_);
 
-        lv_obj_t* item_label = lv_label_create(canvas);
+        lv_obj_t* item_label = CreateLabel(canvas);
         char item_text[48];
         snprintf(item_text, sizeof(item_text), "%s %d. %s", is_selected ? ">" : " ", idx + 1,
                  saved_wifi_list_[idx].first.c_str());
         lv_label_set_text(item_label, item_text);
-        lv_obj_set_style_text_color(
-            item_label, is_selected ? lv_color_hex(0x00FF00) : lv_color_hex(0xFFFFFF), 0);
         lv_obj_align(item_label, LV_ALIGN_TOP_LEFT, 5, y_offset);
         y_offset += 20;
     }
@@ -285,9 +284,8 @@ void WifiConfigUI::ShowConnecting() {
 
     DrawHeader(Lang::Strings::CONNECTING);
 
-    lv_obj_t* ssid_label = lv_label_create(canvas);
+    lv_obj_t* ssid_label = CreateLabel(canvas);
     lv_label_set_text_fmt(ssid_label, Lang::Strings::WIFI_CONNECTING_TO, selected_ssid_.c_str());
-    lv_obj_set_style_text_color(ssid_label, lv_color_hex(0xFFFF00), 0);
     lv_obj_align(ssid_label, LV_ALIGN_CENTER, 0, 0);
 
     DrawFooter(Lang::Strings::PLEASE_WAIT);
@@ -300,14 +298,12 @@ void WifiConfigUI::ShowSuccess() {
 
     DrawHeader(Lang::Strings::CONNECTION_SUCCESSFUL);
 
-    lv_obj_t* ssid_label = lv_label_create(canvas);
+    lv_obj_t* ssid_label = CreateLabel(canvas);
     lv_label_set_text_fmt(ssid_label, "%s%s", Lang::Strings::CONNECTED_TO, selected_ssid_.c_str());
-    lv_obj_set_style_text_color(ssid_label, lv_color_hex(0x00FF00), 0);
     lv_obj_align(ssid_label, LV_ALIGN_CENTER, 0, -10);
 
-    lv_obj_t* saved_label = lv_label_create(canvas);
+    lv_obj_t* saved_label = CreateLabel(canvas);
     lv_label_set_text(saved_label, Lang::Strings::WIFI_SETTINGS_SAVED);
-    lv_obj_set_style_text_color(saved_label, lv_color_hex(0x00FFFF), 0);
     lv_obj_align(saved_label, LV_ALIGN_CENTER, 0, 15);
 
     DrawFooter(Lang::Strings::WIFI_CONTINUE_HINT);
@@ -320,10 +316,9 @@ void WifiConfigUI::ShowFailed() {
 
     DrawHeader(Lang::Strings::WIFI_CONNECTION_FAILED);
 
-    lv_obj_t* ssid_label = lv_label_create(canvas);
+    lv_obj_t* ssid_label = CreateLabel(canvas);
     lv_label_set_text_fmt(ssid_label, Lang::Strings::WIFI_CANNOT_CONNECT_TO,
                           selected_ssid_.c_str());
-    lv_obj_set_style_text_color(ssid_label, lv_color_hex(0xFF0000), 0);
     lv_obj_align(ssid_label, LV_ALIGN_CENTER, 0, 0);
 
     DrawFooter(Lang::Strings::WIFI_RETRY_BACK_HINT);
@@ -335,9 +330,8 @@ void WifiConfigUI::DrawHeader(const char* title) {
     }
     lv_obj_t* canvas = container_;
 
-    lv_obj_t* header = lv_label_create(canvas);
+    lv_obj_t* header = CreateLabel(canvas);
     lv_label_set_text(header, title);
-    lv_obj_set_style_text_color(header, lv_color_hex(0x00FFFF), 0);
     lv_obj_align(header, LV_ALIGN_TOP_LEFT, 5, 2);
 }
 
@@ -347,9 +341,8 @@ void WifiConfigUI::DrawFooter(const char* hint) {
     }
     lv_obj_t* canvas = container_;
 
-    lv_obj_t* footer = lv_label_create(canvas);
+    lv_obj_t* footer = CreateLabel(canvas);
     lv_label_set_text(footer, hint);
-    lv_obj_set_style_text_color(footer, lv_color_hex(0x888888), 0);
     lv_obj_set_style_text_font(footer, &lv_font_montserrat_14, 0);
     lv_obj_align(footer, LV_ALIGN_BOTTOM_LEFT, 5, -2);
 }
@@ -367,14 +360,12 @@ void WifiConfigUI::DrawWifiList(const std::vector<WifiScanResult>& list, int sel
         bool is_selected = (idx == selected);
         const WifiScanResult& wifi = list[idx];
 
-        lv_obj_t* item_label = lv_label_create(canvas);
+        lv_obj_t* item_label = CreateLabel(canvas);
         std::string signal = GetSignalBars(wifi.rssi);
         char item_text[64];
         snprintf(item_text, sizeof(item_text), "%s%d.%-12s %4ddBm %s", is_selected ? ">" : " ",
                  idx + 1, wifi.ssid.substr(0, 12).c_str(), wifi.rssi, signal.c_str());
         lv_label_set_text(item_label, item_text);
-        lv_obj_set_style_text_color(
-            item_label, is_selected ? lv_color_hex(0x00FF00) : lv_color_hex(0xFFFFFF), 0);
         lv_obj_align(item_label, LV_ALIGN_TOP_LEFT, 2, y_offset);
         y_offset += 20;
     }
