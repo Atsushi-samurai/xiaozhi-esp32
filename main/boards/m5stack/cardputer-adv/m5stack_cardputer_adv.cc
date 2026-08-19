@@ -21,6 +21,7 @@
 #include <esp_lcd_panel_vendor.h>
 #include <esp_log.h>
 #include <esp_timer.h>
+#include <esp_wifi.h>
 #include <cJSON.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -53,6 +54,10 @@ private:
     std::unique_ptr<WifiConfigUI> wifi_config_ui_;
     std::unique_ptr<PersonaSelectUI> persona_select_ui_;
     bool wifi_config_mode_ = false;
+    // The regular WifiStation owns the radio while connected.  On-device
+    // reconfiguration temporarily starts the driver without that station so
+    // its automatic saved-network reconnect cannot consume the UI scan.
+    bool on_device_wifi_config_radio_active_ = false;
     esp_timer_handle_t wifi_config_hold_timer_ = nullptr;
     esp_timer_handle_t wifi_config_confirmation_timer_ = nullptr;
     std::atomic_bool wifi_config_key_pressed_{false};
@@ -391,10 +396,67 @@ private:
                 return;
             }
 
-            // WifiBoard performs the existing graceful protocol shutdown, then starts its AP
-            // portal.
-            EnterWifiConfigMode();
+            // Close the current protocol before disconnecting Wi-Fi.  Queue the
+            // UI start behind ResetProtocol() so it runs after that cleanup in
+            // the main task.
+            app.ResetProtocol();
+            app.Schedule([this]() { StartOnDeviceWifiConfig(); });
         });
+    }
+
+    bool StartOnDeviceWifiConfigRadio() {
+        auto& wifi_manager = WifiManager::GetInstance();
+
+        // Stop WifiStation first.  Its scan-done handler automatically
+        // reconnects saved SSIDs, which would otherwise race the SSID list
+        // displayed by WifiConfigUI.
+        wifi_manager.StopStation();
+
+        esp_err_t err = esp_wifi_set_mode(WIFI_MODE_STA);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to set on-device WiFi scan mode: %s", esp_err_to_name(err));
+            return false;
+        }
+
+        err = esp_wifi_start();
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to start on-device WiFi scanner: %s", esp_err_to_name(err));
+            return false;
+        }
+
+        on_device_wifi_config_radio_active_ = true;
+        return true;
+    }
+
+    void StopOnDeviceWifiConfigRadio() {
+        if (!on_device_wifi_config_radio_active_) {
+            return;
+        }
+
+        esp_err_t err = esp_wifi_stop();
+        if (err != ESP_OK && err != ESP_ERR_WIFI_NOT_STARTED) {
+            ESP_LOGW(TAG, "Failed to stop on-device WiFi scanner: %s", esp_err_to_name(err));
+        }
+        on_device_wifi_config_radio_active_ = false;
+    }
+
+    void StartOnDeviceWifiConfig() {
+        auto& app = Application::GetInstance();
+        if (app.GetDeviceState() != kDeviceStateIdle) {
+            return;
+        }
+
+        // This uses only Cardputer's display and keyboard.  Do not call
+        // WifiBoard::EnterWifiConfigMode(), which starts the captive portal.
+        app.SetDeviceState(kDeviceStateWifiConfiguring);
+        if (!StartOnDeviceWifiConfigRadio()) {
+            display_->ShowNotification(Lang::Strings::WIFI_NOT_FOUND, 3000);
+            TryWifiConnect();
+            return;
+        }
+
+        ESP_LOGI(TAG, "Opening on-device WiFi configuration UI");
+        StartKeyboardWifiConfig();
     }
 
     void HandleWifiConfigShortcut(const KeyEvent& event) {
@@ -675,6 +737,11 @@ private:
     void AttemptWifiConnection(const std::string& ssid, const std::string& password) {
         ESP_LOGI(TAG, "Attempting WiFi connection to: %s", ssid.c_str());
 
+        // The direct scanner deliberately runs outside WifiManager.  Return
+        // control of the radio before asking WifiManager to own the station
+        // connection again.
+        StopOnDeviceWifiConfigRadio();
+
         // Add to SSID manager (will be saved and used for connection)
         auto& ssid_manager = SsidManager::GetInstance();
         ssid_manager.AddSsid(ssid, password);
@@ -705,6 +772,7 @@ private:
 
     void ExitWifiConfigMode() {
         ESP_LOGI(TAG, "Exiting keyboard WiFi config mode");
+        StopOnDeviceWifiConfigRadio();
         wifi_config_mode_ = false;
         wifi_config_ui_.reset();
 
