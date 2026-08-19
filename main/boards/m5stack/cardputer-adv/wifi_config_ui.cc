@@ -6,6 +6,7 @@
 #include <wifi_manager.h>
 #include <cstring>
 #include "assets/lang_config.h"
+#include "display/display.h"
 
 #define TAG "WifiConfigUI"
 
@@ -33,6 +34,7 @@ WifiConfigUI::WifiConfigUI(LcdDisplay* display)
       last_cursor_toggle_(0) {}
 
 WifiConfigUI::~WifiConfigUI() {
+    DisplayLockGuard lock(display_);
     if (container_ != nullptr) {
         lv_obj_del(container_);
         container_ = nullptr;
@@ -103,27 +105,35 @@ void WifiConfigUI::StartWithSavedList() {
     selected_ssid_.clear();
 
     // Show saved list directly (ShowSavedList will load the list)
+    DisplayLockGuard lock(display_);
     ShowSavedList();
 }
 
 void WifiConfigUI::StartScanning() {
     state_ = WifiConfigState::Scanning;
 
-    lv_obj_t* canvas = GetContainer();
-    DrawHeader(Lang::Strings::SCANNING_WIFI);
-    DrawFooter(Lang::Strings::PLEASE_WAIT);
+    {
+        DisplayLockGuard lock(display_);
+        GetContainer();
+        DrawHeader(Lang::Strings::SCANNING_WIFI);
+        DrawFooter(Lang::Strings::PLEASE_WAIT);
+    }
 
-    // Perform WiFi scan
+    // The scan blocks for multiple seconds. Do not hold the display lock here,
+    // so lvgl_port_task can flush the scanning UI and continue servicing LVGL.
     DoWifiScan();
 
-    // Show results
-    if (scan_results_.empty()) {
-        lv_obj_clean(canvas);
-        DrawHeader(Lang::Strings::WIFI_NOT_FOUND);
-        DrawFooter(Lang::Strings::WIFI_MANUAL_EXIT_HINT);
-    } else {
-        state_ = WifiConfigState::SelectWifi;
-        ShowScanResults();
+    {
+        DisplayLockGuard lock(display_);
+        lv_obj_t* canvas = GetContainer();
+        if (scan_results_.empty()) {
+            lv_obj_clean(canvas);
+            DrawHeader(Lang::Strings::WIFI_NOT_FOUND);
+            DrawFooter(Lang::Strings::WIFI_MANUAL_EXIT_HINT);
+        } else {
+            state_ = WifiConfigState::SelectWifi;
+            ShowScanResults();
+        }
     }
 }
 
@@ -432,15 +442,10 @@ void WifiConfigUI::DeleteSavedWifi(int index) {
     }
 }
 
-void WifiConfigUI::AttemptConnection() {
-    ShowConnecting();
-
-    if (connect_callback_) {
-        connect_callback_(selected_ssid_, input_password_);
-    }
-}
+void WifiConfigUI::AttemptConnection() { ShowConnecting(); }
 
 void WifiConfigUI::OnConnectResult(bool success) {
+    DisplayLockGuard lock(display_);
     if (success) {
         SaveWifiCredentials(selected_ssid_, input_password_);
         ShowSuccess();
@@ -455,55 +460,75 @@ WifiConfigResult WifiConfigUI::HandleKeyEvent(const KeyEvent& event) {
         return WifiConfigResult::None;
     }
 
-    // Check for ESC to cancel from Scanning or SelectWifi states
-    // (other states handle ESC in their own handlers to navigate back)
-    if (event.key_code == KC_ESC) {
-        if (state_ == WifiConfigState::Scanning || state_ == WifiConfigState::SelectWifi) {
-            is_active_ = false;
+    ConnectCallback connect_callback;
+    std::string ssid;
+    std::string password;
+    {
+        DisplayLockGuard lock(display_);
+        const bool was_connecting = state_ == WifiConfigState::Connecting;
+
+        // Check for ESC to cancel from Scanning or SelectWifi states
+        // (other states handle ESC in their own handlers to navigate back)
+        if (event.key_code == KC_ESC) {
+            if (state_ == WifiConfigState::Scanning || state_ == WifiConfigState::SelectWifi) {
+                is_active_ = false;
+                return WifiConfigResult::Cancelled;
+            }
+        }
+
+        // Check if not active (was cancelled in a handler)
+        if (!is_active_) {
             return WifiConfigResult::Cancelled;
+        }
+
+        switch (state_) {
+            case WifiConfigState::Scanning:
+                HandleScanningKey(event);
+                break;
+            case WifiConfigState::SelectWifi:
+                HandleSelectWifiKey(event);
+                break;
+            case WifiConfigState::InputPassword:
+                HandlePasswordInputKey(event);
+                break;
+            case WifiConfigState::InputSsid:
+            case WifiConfigState::InputManualPwd:
+                HandleManualInputKey(event);
+                break;
+            case WifiConfigState::SavedList:
+                HandleSavedListKey(event);
+                break;
+            case WifiConfigState::Connecting:
+                HandleConnectingKey(event);
+                break;
+            case WifiConfigState::Success:
+                HandleResultKey(event);
+                if (event.key_code == KC_ENTER) {
+                    is_active_ = false;
+                    return WifiConfigResult::Connected;
+                }
+                break;
+            case WifiConfigState::Failed:
+                HandleResultKey(event);
+                break;
+        }
+
+        // Check if cancelled by a handler
+        if (!is_active_) {
+            return WifiConfigResult::Cancelled;
+        }
+
+        if (!was_connecting && state_ == WifiConfigState::Connecting && connect_callback_) {
+            connect_callback = connect_callback_;
+            ssid = selected_ssid_;
+            password = input_password_;
         }
     }
 
-    // Check if not active (was cancelled in a handler)
-    if (!is_active_) {
-        return WifiConfigResult::Cancelled;
-    }
-
-    switch (state_) {
-        case WifiConfigState::Scanning:
-            HandleScanningKey(event);
-            break;
-        case WifiConfigState::SelectWifi:
-            HandleSelectWifiKey(event);
-            break;
-        case WifiConfigState::InputPassword:
-            HandlePasswordInputKey(event);
-            break;
-        case WifiConfigState::InputSsid:
-        case WifiConfigState::InputManualPwd:
-            HandleManualInputKey(event);
-            break;
-        case WifiConfigState::SavedList:
-            HandleSavedListKey(event);
-            break;
-        case WifiConfigState::Connecting:
-            HandleConnectingKey(event);
-            break;
-        case WifiConfigState::Success:
-            HandleResultKey(event);
-            if (event.key_code == KC_ENTER) {
-                is_active_ = false;
-                return WifiConfigResult::Connected;
-            }
-            break;
-        case WifiConfigState::Failed:
-            HandleResultKey(event);
-            break;
-    }
-
-    // Check if cancelled by a handler
-    if (!is_active_) {
-        return WifiConfigResult::Cancelled;
+    // The callback waits up to ten seconds for the station connection. It must
+    // run after releasing the display lock so LVGL can keep rendering.
+    if (connect_callback) {
+        connect_callback(ssid, password);
     }
 
     return WifiConfigResult::None;
@@ -728,6 +753,7 @@ void WifiConfigUI::HandleResultKey(const KeyEvent& event) {
 }
 
 void WifiConfigUI::UpdateCursor() {
+    DisplayLockGuard lock(display_);
     if (container_ == nullptr) {
         return;
     }
