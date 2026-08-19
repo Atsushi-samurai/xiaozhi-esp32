@@ -1,11 +1,11 @@
 #ifndef WIFI_CONFIG_UI_H
 #define WIFI_CONFIG_UI_H
 
-#include "tca8418_keyboard.h"
-#include "display/lcd_display.h"
+#include <functional>
 #include <string>
 #include <vector>
-#include <functional>
+#include "display/lcd_display.h"
+#include "tca8418_keyboard.h"
 
 // WiFi scan result structure
 struct WifiScanResult {
@@ -16,27 +16,28 @@ struct WifiScanResult {
 
 // WiFi configuration UI state machine
 enum class WifiConfigState {
-    Scanning,       // Scanning for WiFi networks
-    SelectWifi,     // Selecting from WiFi list
-    InputPassword,  // Entering password for selected WiFi
-    InputSsid,      // Manual SSID input
-    InputManualPwd, // Manual password input (after SSID)
-    SavedList,      // Viewing saved WiFi list
-    Connecting,     // Connecting to WiFi
-    Success,        // Connection successful
-    Failed          // Connection failed
+    Scanning,        // Scanning for WiFi networks
+    SelectWifi,      // Selecting from WiFi list
+    InputPassword,   // Entering password for selected WiFi
+    InputSsid,       // Manual SSID input
+    InputManualPwd,  // Manual password input (after SSID)
+    SavedList,       // Viewing saved WiFi list
+    Connecting,      // Connecting to WiFi
+    Success,         // Connection successful
+    Failed           // Connection failed
 };
 
 // Result of WiFi configuration
 enum class WifiConfigResult {
-    None,           // Still in progress
-    Connected,      // Successfully connected
-    Cancelled       // User cancelled
+    None,       // Still in progress
+    Connected,  // Successfully connected
+    Cancelled   // User cancelled
 };
 
 class WifiConfigUI {
 public:
-    using ConnectCallback = std::function<void(const std::string& ssid, const std::string& password)>;
+    using ConnectCallback =
+        std::function<void(const std::string& ssid, const std::string& password)>;
 
     WifiConfigUI(LcdDisplay* display);
     ~WifiConfigUI();
@@ -64,6 +65,7 @@ public:
 
 private:
     LcdDisplay* display_;
+    lv_obj_t* container_ = nullptr;
     WifiConfigState state_;
     bool is_active_;
     ConnectCallback connect_callback_;
@@ -117,9 +119,11 @@ private:
     void HandleResultKey(const KeyEvent& event);
 
     // Helper functions
+    lv_obj_t* GetContainer();
     void DrawHeader(const char* title);
     void DrawFooter(const char* hint);
-    void DrawInputField(const char* label, const std::string& value, bool is_password, bool is_active);
+    void DrawInputField(const char* label, const std::string& value, bool is_password,
+                        bool is_active);
     void DrawWifiList(const std::vector<WifiScanResult>& list, int selected, int scroll_offset);
     void DrawSavedWifiList();
     std::string GetSignalBars(int8_t rssi);
@@ -130,4 +134,4 @@ private:
     void AttemptConnection();
 };
 
-#endif // WIFI_CONFIG_UI_H
+#endif  // WIFI_CONFIG_UI_H

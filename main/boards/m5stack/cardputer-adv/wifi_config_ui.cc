@@ -1,10 +1,10 @@
-#include "assets/lang_config.h"
 #include "wifi_config_ui.h"
 #include <esp_log.h>
 #include <esp_wifi.h>
-#include <wifi_manager.h>
 #include <ssid_manager.h>
+#include <wifi_manager.h>
 #include <cstring>
+#include "assets/lang_config.h"
 
 #define TAG "WifiConfigUI"
 
@@ -18,10 +18,29 @@ WifiConfigUI::WifiConfigUI(LcdDisplay* display)
       saved_scroll_offset_(0),
       input_focus_on_password_(false),
       cursor_visible_(true),
-      last_cursor_toggle_(0) {
-}
+      last_cursor_toggle_(0) {}
 
 WifiConfigUI::~WifiConfigUI() {
+    if (container_ != nullptr) {
+        lv_obj_del(container_);
+        container_ = nullptr;
+    }
+}
+
+lv_obj_t* WifiConfigUI::GetContainer() {
+    if (container_ == nullptr) {
+        container_ = lv_obj_create(lv_scr_act());
+        lv_obj_remove_style_all(container_);
+        lv_obj_set_size(container_, LV_PCT(100), LV_PCT(100));
+        lv_obj_set_pos(container_, 0, 0);
+        lv_obj_set_style_bg_color(container_, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_bg_opa(container_, LV_OPA_COVER, 0);
+        lv_obj_set_scrollbar_mode(container_, LV_SCROLLBAR_MODE_OFF);
+        lv_obj_move_foreground(container_);
+    }
+
+    lv_obj_clean(container_);
+    return container_;
 }
 
 void WifiConfigUI::Start() {
@@ -57,8 +76,7 @@ void WifiConfigUI::StartWithSavedList() {
 void WifiConfigUI::StartScanning() {
     state_ = WifiConfigState::Scanning;
 
-    lv_obj_t* canvas = lv_scr_act();
-    lv_obj_clean(canvas);
+    lv_obj_t* canvas = GetContainer();
     DrawHeader(Lang::Strings::SCANNING_WIFI);
     DrawFooter(Lang::Strings::PLEASE_WAIT);
 
@@ -137,8 +155,7 @@ void WifiConfigUI::ShowPasswordInput() {
 }
 
 void WifiConfigUI::RedrawPasswordInput() {
-    lv_obj_t* canvas = lv_scr_act();
-    lv_obj_clean(canvas);
+    lv_obj_t* canvas = GetContainer();
 
     DrawHeader(Lang::Strings::WIFI_ENTER_PASSWORD);
 
@@ -176,8 +193,7 @@ void WifiConfigUI::ShowManualInput() {
 }
 
 void WifiConfigUI::RedrawManualInput() {
-    lv_obj_t* canvas = lv_scr_act();
-    lv_obj_clean(canvas);
+    lv_obj_t* canvas = GetContainer();
 
     DrawHeader(Lang::Strings::WIFI_MANUAL_SETUP);
 
@@ -192,7 +208,8 @@ void WifiConfigUI::RedrawManualInput() {
         ssid_display += cursor_visible_ ? "_" : " ";
     }
     lv_label_set_text(ssid_input, ssid_display.c_str());
-    lv_obj_set_style_text_color(ssid_input, input_focus_on_password_ ? lv_color_hex(0x888888) : lv_color_hex(0xFFFF00), 0);
+    lv_obj_set_style_text_color(
+        ssid_input, input_focus_on_password_ ? lv_color_hex(0x888888) : lv_color_hex(0xFFFF00), 0);
     lv_obj_align(ssid_input, LV_ALIGN_TOP_LEFT, 5, 45);
 
     lv_obj_t* pwd_label = lv_label_create(canvas);
@@ -206,7 +223,8 @@ void WifiConfigUI::RedrawManualInput() {
         pwd_display += cursor_visible_ ? "_" : " ";
     }
     lv_label_set_text(pwd_input, pwd_display.c_str());
-    lv_obj_set_style_text_color(pwd_input, input_focus_on_password_ ? lv_color_hex(0xFFFF00) : lv_color_hex(0x888888), 0);
+    lv_obj_set_style_text_color(
+        pwd_input, input_focus_on_password_ ? lv_color_hex(0xFFFF00) : lv_color_hex(0x888888), 0);
     lv_obj_align(pwd_input, LV_ALIGN_TOP_LEFT, 5, 90);
 
     DrawFooter(Lang::Strings::WIFI_MANUAL_CONFIRM_BACK_HINT);
@@ -222,8 +240,7 @@ void WifiConfigUI::ShowSavedList() {
 }
 
 void WifiConfigUI::DrawSavedWifiList() {
-    lv_obj_t* canvas = lv_scr_act();
-    lv_obj_clean(canvas);
+    lv_obj_t* canvas = GetContainer();
 
     char title[48];
     snprintf(title, sizeof(title), Lang::Strings::WIFI_SAVED_NETWORKS,
@@ -240,7 +257,8 @@ void WifiConfigUI::DrawSavedWifiList() {
     }
 
     int y_offset = 25;
-    int visible_count = std::min((int)saved_wifi_list_.size() - saved_scroll_offset_, MAX_VISIBLE_ITEMS);
+    int visible_count =
+        std::min((int)saved_wifi_list_.size() - saved_scroll_offset_, MAX_VISIBLE_ITEMS);
 
     for (int i = 0; i < visible_count; i++) {
         int idx = saved_scroll_offset_ + i;
@@ -248,12 +266,11 @@ void WifiConfigUI::DrawSavedWifiList() {
 
         lv_obj_t* item_label = lv_label_create(canvas);
         char item_text[48];
-        snprintf(item_text, sizeof(item_text), "%s %d. %s",
-                 is_selected ? ">" : " ",
-                 idx + 1,
+        snprintf(item_text, sizeof(item_text), "%s %d. %s", is_selected ? ">" : " ", idx + 1,
                  saved_wifi_list_[idx].first.c_str());
         lv_label_set_text(item_label, item_text);
-        lv_obj_set_style_text_color(item_label, is_selected ? lv_color_hex(0x00FF00) : lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_color(
+            item_label, is_selected ? lv_color_hex(0x00FF00) : lv_color_hex(0xFFFFFF), 0);
         lv_obj_align(item_label, LV_ALIGN_TOP_LEFT, 5, y_offset);
         y_offset += 20;
     }
@@ -264,8 +281,7 @@ void WifiConfigUI::DrawSavedWifiList() {
 void WifiConfigUI::ShowConnecting() {
     state_ = WifiConfigState::Connecting;
 
-    lv_obj_t* canvas = lv_scr_act();
-    lv_obj_clean(canvas);
+    lv_obj_t* canvas = GetContainer();
 
     DrawHeader(Lang::Strings::CONNECTING);
 
@@ -280,8 +296,7 @@ void WifiConfigUI::ShowConnecting() {
 void WifiConfigUI::ShowSuccess() {
     state_ = WifiConfigState::Success;
 
-    lv_obj_t* canvas = lv_scr_act();
-    lv_obj_clean(canvas);
+    lv_obj_t* canvas = GetContainer();
 
     DrawHeader(Lang::Strings::CONNECTION_SUCCESSFUL);
 
@@ -301,8 +316,7 @@ void WifiConfigUI::ShowSuccess() {
 void WifiConfigUI::ShowFailed() {
     state_ = WifiConfigState::Failed;
 
-    lv_obj_t* canvas = lv_scr_act();
-    lv_obj_clean(canvas);
+    lv_obj_t* canvas = GetContainer();
 
     DrawHeader(Lang::Strings::WIFI_CONNECTION_FAILED);
 
@@ -316,7 +330,10 @@ void WifiConfigUI::ShowFailed() {
 }
 
 void WifiConfigUI::DrawHeader(const char* title) {
-    lv_obj_t* canvas = lv_scr_act();
+    if (container_ == nullptr) {
+        return;
+    }
+    lv_obj_t* canvas = container_;
 
     lv_obj_t* header = lv_label_create(canvas);
     lv_label_set_text(header, title);
@@ -325,7 +342,10 @@ void WifiConfigUI::DrawHeader(const char* title) {
 }
 
 void WifiConfigUI::DrawFooter(const char* hint) {
-    lv_obj_t* canvas = lv_scr_act();
+    if (container_ == nullptr) {
+        return;
+    }
+    lv_obj_t* canvas = container_;
 
     lv_obj_t* footer = lv_label_create(canvas);
     lv_label_set_text(footer, hint);
@@ -335,8 +355,7 @@ void WifiConfigUI::DrawFooter(const char* hint) {
 }
 
 void WifiConfigUI::DrawWifiList(const std::vector<WifiScanResult>& list, int selected, int scroll) {
-    lv_obj_t* canvas = lv_scr_act();
-    lv_obj_clean(canvas);
+    lv_obj_t* canvas = GetContainer();
 
     DrawHeader(Lang::Strings::WIFI_SELECT_NETWORK);
 
@@ -351,14 +370,11 @@ void WifiConfigUI::DrawWifiList(const std::vector<WifiScanResult>& list, int sel
         lv_obj_t* item_label = lv_label_create(canvas);
         std::string signal = GetSignalBars(wifi.rssi);
         char item_text[64];
-        snprintf(item_text, sizeof(item_text), "%s%d.%-12s %4ddBm %s",
-                 is_selected ? ">" : " ",
-                 idx + 1,
-                 wifi.ssid.substr(0, 12).c_str(),
-                 wifi.rssi,
-                 signal.c_str());
+        snprintf(item_text, sizeof(item_text), "%s%d.%-12s %4ddBm %s", is_selected ? ">" : " ",
+                 idx + 1, wifi.ssid.substr(0, 12).c_str(), wifi.rssi, signal.c_str());
         lv_label_set_text(item_label, item_text);
-        lv_obj_set_style_text_color(item_label, is_selected ? lv_color_hex(0x00FF00) : lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_color(
+            item_label, is_selected ? lv_color_hex(0x00FF00) : lv_color_hex(0xFFFFFF), 0);
         lv_obj_align(item_label, LV_ALIGN_TOP_LEFT, 2, y_offset);
         y_offset += 20;
     }
@@ -367,10 +383,14 @@ void WifiConfigUI::DrawWifiList(const std::vector<WifiScanResult>& list, int sel
 }
 
 std::string WifiConfigUI::GetSignalBars(int8_t rssi) {
-    if (rssi >= -50) return "████";
-    if (rssi >= -60) return "███░";
-    if (rssi >= -70) return "██░░";
-    if (rssi >= -80) return "█░░░";
+    if (rssi >= -50)
+        return "████";
+    if (rssi >= -60)
+        return "███░";
+    if (rssi >= -70)
+        return "██░░";
+    if (rssi >= -80)
+        return "█░░░";
     return "░░░░";
 }
 
@@ -425,8 +445,7 @@ WifiConfigResult WifiConfigUI::HandleKeyEvent(const KeyEvent& event) {
     // Check for ESC to cancel from Scanning or SelectWifi states
     // (other states handle ESC in their own handlers to navigate back)
     if (event.key_code == KC_ESC) {
-        if (state_ == WifiConfigState::Scanning ||
-            state_ == WifiConfigState::SelectWifi) {
+        if (state_ == WifiConfigState::Scanning || state_ == WifiConfigState::SelectWifi) {
             is_active_ = false;
             return WifiConfigResult::Cancelled;
         }
@@ -560,7 +579,8 @@ void WifiConfigUI::HandlePasswordInputKey(const KeyEvent& event) {
 
         default:
             // Add character if it's a printable key
-            if (event.key_char && strlen(event.key_char) > 0 && input_password_.length() < MAX_INPUT_LENGTH) {
+            if (event.key_char && strlen(event.key_char) > 0 &&
+                input_password_.length() < MAX_INPUT_LENGTH) {
                 input_password_ += event.key_char;
                 RedrawPasswordInput();
             }
@@ -610,7 +630,8 @@ void WifiConfigUI::HandleManualInputKey(const KeyEvent& event) {
 
         default:
             // Add character if it's a printable key
-            if (event.key_char && strlen(event.key_char) > 0 && current_input->length() < MAX_INPUT_LENGTH) {
+            if (event.key_char && strlen(event.key_char) > 0 &&
+                current_input->length() < MAX_INPUT_LENGTH) {
                 *current_input += event.key_char;
                 RedrawManualInput();
             }
@@ -653,7 +674,8 @@ void WifiConfigUI::HandleSavedListKey(const KeyEvent& event) {
         case KC_BACKSPACE:  // Del key for delete
             if (!saved_wifi_list_.empty()) {
                 DeleteSavedWifi(saved_selected_index_);
-                if (saved_selected_index_ >= (int)saved_wifi_list_.size() && saved_selected_index_ > 0) {
+                if (saved_selected_index_ >= (int)saved_wifi_list_.size() &&
+                    saved_selected_index_ > 0) {
                     saved_selected_index_--;
                 }
                 DrawSavedWifiList();
@@ -693,6 +715,10 @@ void WifiConfigUI::HandleResultKey(const KeyEvent& event) {
 }
 
 void WifiConfigUI::UpdateCursor() {
+    if (container_ == nullptr) {
+        return;
+    }
+
     uint32_t now = esp_log_timestamp();
     if (now - last_cursor_toggle_ >= CURSOR_BLINK_MS) {
         cursor_visible_ = !cursor_visible_;
@@ -701,7 +727,8 @@ void WifiConfigUI::UpdateCursor() {
         // Refresh display for input states (use Redraw functions to avoid clearing input)
         if (state_ == WifiConfigState::InputPassword) {
             RedrawPasswordInput();
-        } else if (state_ == WifiConfigState::InputSsid || state_ == WifiConfigState::InputManualPwd) {
+        } else if (state_ == WifiConfigState::InputSsid ||
+                   state_ == WifiConfigState::InputManualPwd) {
             RedrawManualInput();
         }
     }
