@@ -6,6 +6,9 @@
 #include "config.h"
 #include "display/lcd_display.h"
 #include "i2c_device.h"
+#include "ota.h"
+#include "persona_select_ui.h"
+#include "system_info.h"
 #include "tca8418_keyboard.h"
 #include "wifi_board.h"
 #include "wifi_config_ui.h"
@@ -18,6 +21,9 @@
 #include <esp_lcd_panel_vendor.h>
 #include <esp_log.h>
 #include <esp_timer.h>
+#include <cJSON.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <ssid_manager.h>
 #include <wifi_manager.h>
 #include <algorithm>
@@ -33,6 +39,7 @@
 // Deliberately require a modifier and a long hold so normal typing cannot enter AP mode.
 static constexpr uint64_t WIFI_CONFIG_HOLD_TIME_US = 3 * 1000 * 1000ULL;
 static constexpr uint64_t WIFI_CONFIG_CONFIRMATION_DELAY_US = 750 * 1000ULL;
+static constexpr size_t MAX_PERSONAS = 10;
 
 class M5StackCardputerAdvBoard : public WifiBoard {
 private:
@@ -44,11 +51,278 @@ private:
     Tca8418Keyboard* keyboard_ = nullptr;
     AdcBatteryMonitor* battery_monitor_ = nullptr;
     std::unique_ptr<WifiConfigUI> wifi_config_ui_;
+    std::unique_ptr<PersonaSelectUI> persona_select_ui_;
     bool wifi_config_mode_ = false;
     esp_timer_handle_t wifi_config_hold_timer_ = nullptr;
     esp_timer_handle_t wifi_config_confirmation_timer_ = nullptr;
     std::atomic_bool wifi_config_key_pressed_{false};
     std::atomic_bool wifi_config_hold_triggered_{false};
+    std::atomic_bool persona_selection_active_{false};
+    std::atomic_bool persona_switch_in_progress_{false};
+    std::string persona_api_url_;
+    std::string persona_token_;
+
+    struct PersonaSwitchRequest {
+        M5StackCardputerAdvBoard* board;
+        std::string agent_id;
+        std::string name;
+        std::string api_url;
+        std::string token;
+    };
+
+    void StartPersonaSelection() {
+        auto& app = Application::GetInstance();
+        if (app.GetDeviceState() != kDeviceStateIdle) {
+            persona_selection_active_.store(false);
+            return;
+        }
+
+        ESP_LOGI(TAG, "Opening device persona selector");
+        persona_select_ui_ = std::make_unique<PersonaSelectUI>(display_);
+        persona_select_ui_->ShowLoading();
+        StartPersonaLoad();
+    }
+
+    void ExitPersonaSelection() {
+        persona_select_ui_.reset();
+        persona_api_url_.clear();
+        persona_token_.clear();
+        persona_selection_active_.store(false);
+        persona_switch_in_progress_.store(false);
+    }
+
+    void StartPersonaLoad() {
+        persona_api_url_.clear();
+        persona_token_.clear();
+        persona_switch_in_progress_.store(false);
+        if (persona_select_ui_) {
+            persona_select_ui_->ShowLoading();
+        }
+
+        BaseType_t created = xTaskCreate(
+            [](void* arg) {
+                static_cast<M5StackCardputerAdvBoard*>(arg)->LoadPersonasTask();
+                vTaskDelete(nullptr);
+            },
+            "persona_list", 4096 * 2, this, 2, nullptr);
+        if (created != pdPASS) {
+            ShowPersonaLoadError("読み込みタスクを開始できません");
+        }
+    }
+
+    void ShowPersonaLoadError(const std::string& message) {
+        Application::GetInstance().Schedule([this, message]() {
+            persona_switch_in_progress_.store(false);
+            if (persona_selection_active_.load() && persona_select_ui_) {
+                persona_select_ui_->ShowError(message);
+            }
+        });
+    }
+
+    bool SetupPersonaAccess(Ota& ota, std::string& api_url, std::string& token,
+                            std::string& error) {
+        esp_err_t err = ota.CheckVersion();
+        if (err != ESP_OK) {
+            error = "OTA設定を取得できません";
+            return false;
+        }
+
+        api_url = ota.GetDevicePersonaApiUrl();
+        token = ota.GetDevicePersonaToken();
+        if (api_url.empty() || token.empty()) {
+            error = "ペルソナAPIの認証情報がありません";
+            return false;
+        }
+
+        return true;
+    }
+
+    std::unique_ptr<Http> CreatePersonaHttp(const std::string& token) {
+        auto http = GetNetwork()->CreateHttp(0);
+        http->SetTimeout(15000);
+        http->SetHeader("Device-Id", SystemInfo::GetMacAddress());
+        http->SetHeader("Client-Id", GetUuid());
+        http->SetHeader("Authorization", "Bearer " + token);
+        http->SetHeader("Accept-Language", Lang::CODE);
+        http->SetHeader("Content-Type", "application/json");
+        return http;
+    }
+
+    void LoadPersonasTask() {
+        Ota ota;
+        std::string error;
+        std::string api_url;
+        std::string token;
+        if (!SetupPersonaAccess(ota, api_url, token, error)) {
+            ShowPersonaLoadError(error);
+            return;
+        }
+
+        auto http = CreatePersonaHttp(token);
+        if (!http->Open("GET", api_url)) {
+            ShowPersonaLoadError("ペルソナAPIに接続できません");
+            return;
+        }
+        if (http->GetStatusCode() != 200) {
+            http->Close();
+            ShowPersonaLoadError("ペルソナ一覧の取得に失敗しました");
+            return;
+        }
+
+        std::string body = http->ReadAll();
+        http->Close();
+        cJSON* root = cJSON_Parse(body.c_str());
+        if (root == nullptr) {
+            ShowPersonaLoadError("ペルソナ一覧の応答が不正です");
+            return;
+        }
+
+        std::vector<PersonaOption> personas;
+        cJSON* code = cJSON_GetObjectItem(root, "code");
+        cJSON* data = cJSON_GetObjectItem(root, "data");
+        if (cJSON_IsNumber(code) && code->valueint == 0 && cJSON_IsArray(data)) {
+            cJSON* item = nullptr;
+            cJSON_ArrayForEach (item, data) {
+                if (personas.size() >= MAX_PERSONAS) {
+                    break;
+                }
+                cJSON* agent_id = cJSON_GetObjectItem(item, "agentId");
+                cJSON* name = cJSON_GetObjectItem(item, "name");
+                cJSON* active = cJSON_GetObjectItem(item, "active");
+                if (!cJSON_IsString(agent_id) || !cJSON_IsString(name)) {
+                    continue;
+                }
+                personas.push_back({.agent_id = agent_id->valuestring,
+                                    .name = name->valuestring,
+                                    .active = cJSON_IsTrue(active) ||
+                                              (cJSON_IsNumber(active) && active->valueint != 0)});
+            }
+        }
+        cJSON_Delete(root);
+
+        if (personas.empty()) {
+            ShowPersonaLoadError("利用可能なペルソナがありません");
+            return;
+        }
+
+        Application::GetInstance().Schedule([this, personas = std::move(personas),
+                                             api_url = std::move(api_url),
+                                             token = std::move(token)]() mutable {
+            if (persona_selection_active_.load() && persona_select_ui_) {
+                persona_api_url_ = std::move(api_url);
+                persona_token_ = std::move(token);
+                persona_select_ui_->ShowPersonas(std::move(personas));
+            }
+        });
+    }
+
+    void StartPersonaSwitch(const PersonaOption& persona) {
+        bool expected = false;
+        if (!persona_switch_in_progress_.compare_exchange_strong(expected, true)) {
+            return;
+        }
+        persona_select_ui_->ShowSwitching(persona.name);
+        auto* request = new PersonaSwitchRequest{.board = this,
+                                                 .agent_id = persona.agent_id,
+                                                 .name = persona.name,
+                                                 .api_url = persona_api_url_,
+                                                 .token = persona_token_};
+        BaseType_t created = xTaskCreate(
+            [](void* arg) {
+                std::unique_ptr<PersonaSwitchRequest> request(
+                    static_cast<PersonaSwitchRequest*>(arg));
+                request->board->SwitchPersonaTask(*request);
+                vTaskDelete(nullptr);
+            },
+            "persona_switch", 4096 * 2, request, 2, nullptr);
+        if (created != pdPASS) {
+            delete request;
+            persona_switch_in_progress_.store(false);
+            ShowPersonaLoadError("切替タスクを開始できません");
+        }
+    }
+
+    void SwitchPersonaTask(const PersonaSwitchRequest& request) {
+        auto http = CreatePersonaHttp(request.token);
+        cJSON* root = cJSON_CreateObject();
+        cJSON_AddStringToObject(root, "agentId", request.agent_id.c_str());
+        char* json = cJSON_PrintUnformatted(root);
+        std::string payload = json == nullptr ? "" : json;
+        cJSON_free(json);
+        cJSON_Delete(root);
+        if (payload.empty()) {
+            ShowPersonaLoadError("切替要求を作成できません");
+            return;
+        }
+
+        http->SetContent(std::move(payload));
+        if (!http->Open("POST", request.api_url + "/activate")) {
+            ShowPersonaLoadError("ペルソナAPIに接続できません");
+            return;
+        }
+        if (http->GetStatusCode() != 200) {
+            http->Close();
+            ShowPersonaLoadError("ペルソナの切替に失敗しました");
+            return;
+        }
+
+        std::string body = http->ReadAll();
+        http->Close();
+        cJSON* response = cJSON_Parse(body.c_str());
+        cJSON* code = response == nullptr ? nullptr : cJSON_GetObjectItem(response, "code");
+        const bool success = cJSON_IsNumber(code) && code->valueint == 0;
+        cJSON_Delete(response);
+        if (!success) {
+            ShowPersonaLoadError("ペルソナの切替に失敗しました");
+            return;
+        }
+
+        Application::GetInstance().Schedule([this, name = request.name]() {
+            if (!persona_selection_active_.load()) {
+                return;
+            }
+            ExitPersonaSelection();
+            display_->ShowNotification(std::string("「") + name + "」に切替中...", 5000);
+            Application::GetInstance().ReloadProtocolConfiguration();
+        });
+    }
+
+    void HandlePersonaShortcut(const KeyEvent& event) {
+        if (!event.pressed || event.key_code != KC_P ||
+            (keyboard_->GetModifierMask() & KEY_MOD_CTRL) == 0) {
+            return;
+        }
+        if (Application::GetInstance().GetDeviceState() != kDeviceStateIdle) {
+            return;
+        }
+
+        bool expected = false;
+        if (!persona_selection_active_.compare_exchange_strong(expected, true)) {
+            return;
+        }
+        Application::GetInstance().Schedule([this]() { StartPersonaSelection(); });
+    }
+
+    void HandlePersonaUiKeyEvent(const KeyEvent& event) {
+        Application::GetInstance().Schedule([this, event]() {
+            if (!persona_select_ui_) {
+                return;
+            }
+            switch (persona_select_ui_->HandleKeyEvent(event)) {
+                case PersonaSelectResult::Cancelled:
+                    ExitPersonaSelection();
+                    break;
+                case PersonaSelectResult::Retry:
+                    StartPersonaLoad();
+                    break;
+                case PersonaSelectResult::Selected:
+                    StartPersonaSwitch(persona_select_ui_->selected_persona());
+                    break;
+                case PersonaSelectResult::None:
+                    break;
+            }
+        });
+    }
 
     void InitializeWifiConfigTimers() {
         const esp_timer_create_args_t hold_timer_args = {
@@ -79,8 +353,12 @@ private:
 
     void CancelWifiConfigKeyHold() {
         wifi_config_key_pressed_.store(false);
+        wifi_config_hold_triggered_.store(false);
         if (wifi_config_hold_timer_ != nullptr) {
             esp_timer_stop(wifi_config_hold_timer_);
+        }
+        if (wifi_config_confirmation_timer_ != nullptr) {
+            esp_timer_stop(wifi_config_confirmation_timer_);
         }
     }
 
@@ -92,7 +370,7 @@ private:
         wifi_config_hold_triggered_.store(true);
         Application::GetInstance().Schedule([this]() {
             auto& app = Application::GetInstance();
-            if (app.GetDeviceState() != kDeviceStateIdle) {
+            if (!wifi_config_key_pressed_.load() || app.GetDeviceState() != kDeviceStateIdle) {
                 wifi_config_hold_triggered_.store(false);
                 return;
             }
@@ -234,6 +512,9 @@ private:
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
+            if (persona_selection_active_.load()) {
+                return;
+            }
             auto& app = Application::GetInstance();
             if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
@@ -278,7 +559,15 @@ private:
             return;
         }
 
+        // Persona UI is driven in the main task so keyboard callbacks never
+        // manipulate LVGL or start network I/O directly.
+        if (persona_selection_active_.load()) {
+            HandlePersonaUiKeyEvent(event);
+            return;
+        }
+
         HandleWifiConfigShortcut(event);
+        HandlePersonaShortcut(event);
 
         // Handle W and S keys during WiFi configuring state (scanning screen)
         auto& app = Application::GetInstance();
@@ -294,8 +583,8 @@ private:
     }
 
     void HandleLegacyKeyPress(LegacyKeyCode key) {
-        // Skip if in WiFi config mode
-        if (wifi_config_mode_) {
+        // Skip while either board-owned configuration UI has focus.
+        if (wifi_config_mode_ || persona_selection_active_.load()) {
             return;
         }
 

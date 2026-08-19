@@ -354,6 +354,25 @@ void Application::ActivationTask() {
     xEventGroupSetBits(event_group_, MAIN_EVENT_ACTIVATION_DONE);
 }
 
+void Application::ProtocolReloadTask() {
+    ota_ = std::make_unique<Ota>();
+    esp_err_t err = ota_->CheckVersion();
+
+    Schedule([this, err]() {
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to refresh OTA protocol configuration: %s", esp_err_to_name(err));
+            ota_.reset();
+            SetDeviceState(kDeviceStateIdle);
+            Alert(Lang::Strings::ERROR, Lang::Strings::SERVER_NOT_CONNECTED, "cloud_off",
+                  Lang::Sounds::OGG_EXCLAMATION);
+            return;
+        }
+
+        InitializeProtocol();
+        xEventGroupSetBits(event_group_, MAIN_EVENT_ACTIVATION_DONE);
+    });
+}
+
 void Application::CheckAssetsVersion() {
     // Only allow CheckAssetsVersion to be called once
     if (assets_version_checked_) {
@@ -1198,5 +1217,40 @@ void Application::ResetProtocol() {
         }
         // Reset protocol
         protocol_.reset();
+    });
+}
+
+void Application::ReloadProtocolConfiguration() {
+    Schedule([this]() {
+        if (GetDeviceState() != kDeviceStateIdle || activation_task_handle_ != nullptr) {
+            ESP_LOGW(TAG, "Ignoring protocol configuration reload outside idle state");
+            return;
+        }
+
+        // Persona selection is only permitted while idle, so there is no audio
+        // channel to drain. Destroying the protocol also disconnects MQTT when
+        // that transport is in use before the refreshed configuration starts.
+        audio_service_.EnableVoiceProcessing(false);
+        audio_service_.EnableWakeWordDetection(false);
+        protocol_.reset();
+        if (!SetDeviceState(kDeviceStateActivating)) {
+            return;
+        }
+
+        BaseType_t created = xTaskCreate(
+            [](void* arg) {
+                Application* app = static_cast<Application*>(arg);
+                app->ProtocolReloadTask();
+                app->activation_task_handle_ = nullptr;
+                vTaskDelete(NULL);
+            },
+            "protocol_reload", 4096 * 2, this, 2, &activation_task_handle_);
+        if (created != pdPASS) {
+            ESP_LOGE(TAG, "Unable to create protocol reload task");
+            activation_task_handle_ = nullptr;
+            SetDeviceState(kDeviceStateIdle);
+            Alert(Lang::Strings::ERROR, Lang::Strings::SERVER_NOT_CONNECTED, "cloud_off",
+                  Lang::Sounds::OGG_EXCLAMATION);
+        }
     });
 }
