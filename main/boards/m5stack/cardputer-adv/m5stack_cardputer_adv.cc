@@ -636,10 +636,10 @@ private:
         if (app.GetDeviceState() == kDeviceStateWifiConfiguring && event.pressed) {
             if (event.key_code == KC_W) {
                 ESP_LOGI(TAG, "W key pressed - entering keyboard WiFi config");
-                StartKeyboardWifiConfig();
+                app.Schedule([this]() { StartKeyboardWifiConfig(); });
             } else if (event.key_code == KC_S) {
                 ESP_LOGI(TAG, "S key pressed - showing saved WiFi list");
-                StartKeyboardWifiConfigSaved();
+                app.Schedule([this]() { StartKeyboardWifiConfigSaved(); });
             }
         }
     }
