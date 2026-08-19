@@ -2,9 +2,12 @@
 
 #include <algorithm>
 
+#include "display/display.h"
+
 PersonaSelectUI::PersonaSelectUI(LcdDisplay* display) : display_(display) {}
 
 PersonaSelectUI::~PersonaSelectUI() {
+    DisplayLockGuard lock(display_);
     if (root_ != nullptr) {
         lv_obj_delete(root_);
         root_ = nullptr;
@@ -41,6 +44,7 @@ void PersonaSelectUI::DrawFooter(const char* hint) {
 }
 
 void PersonaSelectUI::ShowLoading() {
+    DisplayLockGuard lock(display_);
     state_ = State::Loading;
     CreateRoot();
     DrawHeader("ペルソナを読み込み中...");
@@ -53,6 +57,7 @@ void PersonaSelectUI::ShowLoading() {
 }
 
 void PersonaSelectUI::ShowPersonas(std::vector<PersonaOption> personas) {
+    DisplayLockGuard lock(display_);
     personas_ = std::move(personas);
     selected_index_ = 0;
     scroll_offset_ = 0;
@@ -61,6 +66,7 @@ void PersonaSelectUI::ShowPersonas(std::vector<PersonaOption> personas) {
 }
 
 void PersonaSelectUI::ShowSwitching(const std::string& name) {
+    DisplayLockGuard lock(display_);
     state_ = State::Switching;
     CreateRoot();
     DrawHeader("ペルソナを切替中...");
@@ -75,6 +81,7 @@ void PersonaSelectUI::ShowSwitching(const std::string& name) {
 }
 
 void PersonaSelectUI::ShowError(const std::string& message) {
+    DisplayLockGuard lock(display_);
     state_ = State::Error;
     CreateRoot();
     DrawHeader("ペルソナを取得できません");
@@ -93,7 +100,17 @@ void PersonaSelectUI::DrawPersonas() {
     DrawHeader("ペルソナを選択");
 
     if (personas_.empty()) {
-        ShowError("利用可能なペルソナがありません");
+        state_ = State::Error;
+        CreateRoot();
+        DrawHeader("ペルソナを取得できません");
+
+        lv_obj_t* detail = lv_label_create(root_);
+        lv_label_set_text(detail, "利用可能なペルソナがありません");
+        lv_obj_set_style_text_color(detail, lv_color_hex(0xFF6666), 0);
+        lv_obj_set_width(detail, LV_PCT(95));
+        lv_label_set_long_mode(detail, LV_LABEL_LONG_WRAP);
+        lv_obj_align(detail, LV_ALIGN_CENTER, 0, 0);
+        DrawFooter("Enter: 再試行  Esc: 戻る");
         return;
     }
 
@@ -126,6 +143,7 @@ void PersonaSelectUI::DrawPersonas() {
 }
 
 PersonaSelectResult PersonaSelectUI::HandleKeyEvent(const KeyEvent& event) {
+    DisplayLockGuard lock(display_);
     if (!event.pressed || event.is_modifier) {
         return PersonaSelectResult::None;
     }
