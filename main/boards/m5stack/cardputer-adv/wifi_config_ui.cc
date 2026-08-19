@@ -1,6 +1,7 @@
 #include "wifi_config_ui.h"
 #include <esp_log.h>
 #include <esp_wifi.h>
+#include <inttypes.h>
 #include <ssid_manager.h>
 #include <wifi_manager.h>
 #include <cstring>
@@ -40,14 +41,35 @@ WifiConfigUI::~WifiConfigUI() {
 
 lv_obj_t* WifiConfigUI::GetContainer() {
     if (container_ == nullptr) {
-        container_ = lv_obj_create(lv_scr_act());
-        lv_obj_remove_style_all(container_);
-        lv_obj_set_size(container_, LV_PCT(100), LV_PCT(100));
-        lv_obj_set_pos(container_, 0, 0);
+        lv_obj_t* screen = lv_scr_act();
+        uint32_t child_count_before = lv_obj_get_child_cnt(screen);
+
+        // Follow LcdDisplay::SetupUI's known-good full-screen container pattern.
+        container_ = lv_obj_create(screen);
+        lv_obj_set_size(container_, LV_HOR_RES, LV_VER_RES);
+        lv_obj_set_style_radius(container_, 0, 0);
+        lv_obj_set_style_pad_all(container_, 0, 0);
+        lv_obj_set_style_border_width(container_, 0, 0);
         lv_obj_set_style_bg_color(container_, lv_color_hex(0x000000), 0);
-        lv_obj_set_style_bg_opa(container_, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(container_, lv_color_hex(0x000000), 0);
         lv_obj_set_scrollbar_mode(container_, LV_SCROLLBAR_MODE_OFF);
         lv_obj_move_foreground(container_);
+
+        // Temporary diagnostics for the next on-device WiFi UI invocation.
+        // Remove or simplify after the background rendering issue is confirmed resolved.
+        lv_color_t container_bg_color = lv_obj_get_style_bg_color(container_, LV_PART_MAIN);
+        lv_opa_t container_bg_opa = lv_obj_get_style_bg_opa(container_, LV_PART_MAIN);
+        lv_color_t screen_bg_color = lv_obj_get_style_bg_color(screen, LV_PART_MAIN);
+        lv_opa_t screen_bg_opa = lv_obj_get_style_bg_opa(screen, LV_PART_MAIN);
+        uint32_t child_count_after = lv_obj_get_child_cnt(screen);
+        int32_t container_index = lv_obj_get_index(container_);
+        ESP_LOGI(TAG,
+                 "Temporary UI diagnostics: screen children=%" PRIu32 " -> %" PRIu32
+                 ", container index=%" PRId32 ", container bg=0x%08" PRIX32 ", opa=%u",
+                 child_count_before, child_count_after, container_index,
+                 lv_color_to_u32(container_bg_color), static_cast<unsigned>(container_bg_opa));
+        ESP_LOGI(TAG, "Temporary UI diagnostics: screen bg=0x%08" PRIX32 ", opa=%u",
+                 lv_color_to_u32(screen_bg_color), static_cast<unsigned>(screen_bg_opa));
     }
 
     lv_obj_clean(container_);
